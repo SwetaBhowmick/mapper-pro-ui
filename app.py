@@ -1,115 +1,109 @@
 import streamlit as st
 import pandas as pd
 from rapidfuzz import process
-import deepl
+import requests
 
-# -------- PAGE CONFIG --------
+# ------------------ UI HEADER ------------------ #
 st.set_page_config(page_title="Mapper Pro UI", layout="wide")
 
-# -------- HEADER --------
 st.markdown("""
-<div style='background-color:#232F3E;padding:15px;border-radius:8px'>
-<h2 style='color:white;margin:0;'>🚀 Mapper Pro UI</h2>
-<p style='color:#D5DBDB;margin:0;'>DeepL Powered • Smart Mapping • Accent Safe</p>
-</div>
+    <h1 style='text-align: center;'>🚀 Mapper Pro UI</h1>
+    <p style='text-align: center; font-size:18px;'>
+    Smart Language Mapping • Accent Safe • Auto Detection
+    </p>
 """, unsafe_allow_html=True)
 
-st.write("")
+# ------------------ API KEY ------------------ #
+deepl_api_key = st.text_input("🔑 Enter DeepL API Key (Optional)", type="password")
 
-# -------- API KEY --------
-auth_key = st.text_input("🔑 Enter DeepL API Key", type="password")
-
-# -------- FILE UPLOAD --------
+# ------------------ FILE UPLOAD ------------------ #
 file = st.file_uploader("📂 Upload Excel File", type=["xlsx"])
 
-if file and auth_key:
-
+if file:
     df = pd.read_excel(file)
 
     st.subheader("🔍 Preview")
-    st.dataframe(df.head(), use_container_width=True)
+    st.dataframe(df.head())
 
     columns = df.columns.tolist()
 
-    col1, col2 = st.columns(2)
+    # ------------------ COLUMN SELECTION ------------------ #
+    source_col = st.selectbox("Source Column", columns)
 
-    with col1:
-        source_col = st.selectbox("Source Column", columns)
+    target_options = [col for col in columns if col != source_col]
+    target_col = st.selectbox("Target Column (Language to map into)", target_options)
 
-    with col2:
-        target_col = st.selectbox("Target Column (Language to map into)", columns)
-
-    # -------- RUN BUTTON --------
+    # ------------------ BUTTON ------------------ #
     if st.button("🚀 Run Mapping"):
 
-        translator = deepl.Translator(auth_key)
+        # Clean text ONLY for matching (not original data)
+        df["__source_clean"] = df[source_col].astype(str).str.lower().str.strip()
+        df["__target_clean"] = df[target_col].astype(str).str.lower().str.strip()
 
-        st.info("🔄 Translating using DeepL...")
+        target_list = df["__target_clean"].dropna().tolist()
 
-        translated_list = []
-
-        for text in df[source_col]:
-            if pd.isna(text):
-                translated_list.append("")
-            else:
-                try:
-                    result = translator.translate_text(
-                        str(text),
-                        target_lang=target_col.upper()  # DE / FR / NL etc
-                    )
-                    translated_list.append(result.text)
-                except:
-                    translated_list.append("")
-
-        df["AUTO_TRANSLATED"] = translated_list
-
-        st.info("🔍 Matching values...")
-
-        # -------- CLEAN FOR MATCHING ONLY --------
-        source_clean = df["AUTO_TRANSLATED"].astype(str).str.strip().str.casefold()
-        target_clean = df[target_col].astype(str).str.strip().str.casefold()
-
-        # -------- MAP BACK TO ORIGINAL (KEEPS ACCENTS) --------
-        clean_to_original = dict(zip(target_clean, df[target_col]))
-        target_list = list(clean_to_original.keys())
-
+        # ------------------ MATCH FUNCTION ------------------ #
         def match(text):
-            if pd.isna(text):
-                return ""
-
-            text_clean = str(text).strip().casefold()
-            result = process.extractOne(text_clean, target_list)
-
-            if result and result[1] >= 90:
-                return clean_to_original.get(result[0], "")
+            result = process.extractOne(text, target_list)
+            if result and result[1] > 90:
+                return result[0]
             return ""
 
-        df["Matched_Result"] = df["AUTO_TRANSLATED"].apply(match)
+        # ------------------ CHECK IF TRANSLATION NEEDED ------------------ #
+        use_translation = False
 
-        df["Status"] = df["Matched_Result"].apply(
-            lambda x: "Matched" if x else "Not Matched"
-        )
+        if target_col not in df.columns or df[target_col].isna().all():
+            use_translation = True
+
+        # ------------------ TRANSLATION FUNCTION ------------------ #
+        def translate(text):
+            url = "https://api-free.deepl.com/v2/translate"
+            params = {
+                "auth_key": deepl_api_key,
+                "text": text,
+                "target_lang": "DE"
+            }
+            response = requests.post(url, data=params)
+            return response.json()["translations"][0]["text"]
+
+        # ------------------ PROCESS ------------------ #
+        results = []
+
+        for idx, row in df.iterrows():
+            text = row["__source_clean"]
+
+            # 👉 Only translate if needed
+            if use_translation and deepl_api_key:
+                try:
+                    text = translate(text).lower().strip()
+                except:
+                    text = row["__source_clean"]
+
+            matched = match(text)
+
+            # Get ORIGINAL value with accents
+            if matched:
+                original_match = df[df["__target_clean"] == matched][target_col].values
+                if len(original_match) > 0:
+                    results.append(original_match[0])
+                else:
+                    results.append("")
+            else:
+                results.append("")
+
+        df["Mapped_Result"] = results
+
+        # Drop temp columns
+        df.drop(columns=["__source_clean", "__target_clean"], inplace=True)
 
         st.success("✅ Mapping Completed!")
+        st.dataframe(df)
 
-        st.dataframe(df, use_container_width=True)
-
-        # -------- SUMMARY --------
-        total = len(df)
-        matched = (df["Status"] == "Matched").sum()
-
-        st.markdown(f"""
-        ### 📊 Summary
-        - Total Rows: **{total}**
-        - Matched: **{matched}**
-        - Unmatched: **{total - matched}**
-        """)
-
-        # -------- DOWNLOAD (ACCENT SAFE) --------
-        csv = df.to_csv(index=False, encoding="utf-8-sig")
+        # ------------------ DOWNLOAD ------------------ #
+        csv = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
 
         st.download_button(
-            "⬇️ Download Result",
+            "📥 Download Result",
             csv,
             "mapped_output.csv",
             "text/csv"
