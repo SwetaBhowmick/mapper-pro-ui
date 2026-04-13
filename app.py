@@ -5,7 +5,7 @@ from rapidfuzz import process, fuzz
 st.set_page_config(page_title="Mapper Pro UI", layout="wide")
 
 st.title("🚀 Mapper Pro UI")
-st.write("Accurate Language Mapping • No Translation • Accent Safe")
+st.write("US → DE Mapping using DE_translated (English Matching)")
 
 file = st.file_uploader("📂 Upload Excel File", type=["xlsx"])
 
@@ -17,22 +17,20 @@ if file:
 
     columns = df.columns.tolist()
 
-    # Select columns
-    source_col = st.selectbox("Source Column", columns)
-    target_col = st.selectbox(
-        "Target Column (Language to map into)",
-        [col for col in columns if col != source_col]
-    )
+    # Column selection
+    us_col = st.selectbox("Select US Column", columns)
+    de_col = st.selectbox("Select DE Column (Target)", columns)
+    de_translated_col = st.selectbox("Select DE_translated Column (English)", columns)
 
     if st.button("🚀 Run Mapping"):
 
         # Clean ONLY for matching
-        df["_source_clean"] = df[source_col].astype(str).str.lower().str.strip()
-        df["_target_clean"] = df[target_col].astype(str).str.lower().str.strip()
+        df["_us_clean"] = df[us_col].astype(str).str.lower().str.strip()
+        df["_de_trans_clean"] = df[de_translated_col].astype(str).str.lower().str.strip()
 
-        target_list = df["_target_clean"].dropna().unique().tolist()
+        target_list = df["_de_trans_clean"].dropna().unique().tolist()
 
-        # Better matching logic
+        # Matching function
         def match(text):
             if not text or text == "nan":
                 return ""
@@ -40,33 +38,31 @@ if file:
             result = process.extractOne(
                 text,
                 target_list,
-                scorer=fuzz.token_sort_ratio  # better for text variations
+                scorer=fuzz.token_sort_ratio
             )
 
-            # stricter threshold to avoid wrong mapping
-            if result and result[1] >= 85:
+            if result and result[1] >= 90:  # strict threshold
                 return result[0]
             return ""
 
-        # Apply matching
+        # Mapping
         mapped_values = []
 
-        for text in df["_source_clean"]:
+        for text in df["_us_clean"]:
             matched = match(text)
 
             if matched:
-                # Get original value with accents
-                original = df[df["_target_clean"] == matched][target_col].values
+                original = df[df["_de_trans_clean"] == matched][de_col].values
                 mapped_values.append(original[0] if len(original) > 0 else "")
             else:
                 mapped_values.append("")
 
-        df["Mapped_Result"] = mapped_values
+        df["Mapped_DE"] = mapped_values
 
         # Drop temp columns
-        df.drop(columns=["_source_clean", "_target_clean"], inplace=True)
+        df.drop(columns=["_us_clean", "_de_trans_clean"], inplace=True)
 
-        st.success("✅ Mapping Completed (No Translation Used)")
+        st.success("✅ Mapping Completed (English Matching Used)")
         st.dataframe(df)
 
         # Download with accents preserved
